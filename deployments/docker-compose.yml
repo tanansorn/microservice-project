@@ -74,6 +74,7 @@ services:
       CONSUL_ADDR: consul:8500
       SERVICE_HOST: booking
       DATABASE_URL: postgres://postgres:postgres@booking_db:5432/booking?sslmode=disable
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     depends_on:
       - booking_db
       - rabbitmq
@@ -123,6 +124,19 @@ services:
       - payment_db
       - rabbitmq
       - consul
+
+  mailer:
+    build:
+      context: ../
+      dockerfile: services/mailer/Dockerfile
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: "587"
+      SMTP_EMAIL: ""
+      SMTP_PASSWORD: ""
+    depends_on:
+      - rabbitmq
 
 volumes:
   booking_data:
