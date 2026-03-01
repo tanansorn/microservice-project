@@ -11,16 +11,49 @@ services:
       timeout: 3s
       retries: 5
 
-  postgres:
+  booking_db:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: microservice
+      POSTGRES_DB: booking
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - booking_data:/var/lib/postgresql/data
+
+  event_db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: event
+    ports:
+      - "5434:5432"
+    volumes:
+      - event_data:/var/lib/postgresql/data
+
+  member_db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: member
+    ports:
+      - "5435:5432"
+    volumes:
+      - member_data:/var/lib/postgresql/data
+
+  payment_db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: payment
+    ports:
+      - "5436:5432"
+    volumes:
+      - payment_data:/var/lib/postgresql/data
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
@@ -40,8 +73,9 @@ services:
     environment:
       CONSUL_ADDR: consul:8500
       SERVICE_HOST: booking
+      DATABASE_URL: postgres://postgres:postgres@booking_db:5432/booking?sslmode=disable
     depends_on:
-      - postgres
+      - booking_db
       - rabbitmq
       - consul
 
@@ -54,8 +88,9 @@ services:
     environment:
       CONSUL_ADDR: consul:8500
       SERVICE_HOST: event
+      DATABASE_URL: postgres://postgres:postgres@event_db:5432/event?sslmode=disable
     depends_on:
-      - postgres
+      - event_db
       - rabbitmq
       - consul
 
@@ -68,8 +103,9 @@ services:
     environment:
       CONSUL_ADDR: consul:8500
       SERVICE_HOST: member
+      DATABASE_URL: postgres://postgres:postgres@member_db:5432/member?sslmode=disable
     depends_on:
-      - postgres
+      - member_db
       - rabbitmq
       - consul
 
@@ -82,10 +118,14 @@ services:
     environment:
       CONSUL_ADDR: consul:8500
       SERVICE_HOST: payment
+      DATABASE_URL: postgres://postgres:postgres@payment_db:5432/payment?sslmode=disable
     depends_on:
-      - postgres
+      - payment_db
       - rabbitmq
       - consul
 
 volumes:
-  postgres_data:
+  booking_data:
+  event_data:
+  member_data:
+  payment_data:
