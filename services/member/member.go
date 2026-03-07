@@ -1,27 +1,23 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/gofiber/fiber/v3"
 )
 
 func getMemberProfile(c fiber.Ctx) error {
-	// TODO: replace with real business logic
 	id, err := strconv.Atoi(c.Params("id"))
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
-	
 
-	for _, member := range members {
-		if member.ID == id {
-			return c.JSON(member)
-		}
+	var member Member
+	if err := db.First(&member, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).SendString("Member with ID " + c.Params("id") + " not found")
 	}
 
-	return c.Status(fiber.StatusBadRequest).SendString("Member with ID " + c.Params("id") + " not found")
+	return c.JSON(member)
 }
 
 func updateMemberProfile(c fiber.Ctx) error {
@@ -30,35 +26,57 @@ func updateMemberProfile(c fiber.Ctx) error {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
-	memberUpdate := new(UpdateMemberRequest)
-	if err := c.Bind().JSON(memberUpdate); err != nil {
+	var member Member
+	if err := db.First(&member, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).SendString("Member with ID " + c.Params("id") + " not found")
+	}
+
+	var req UpdateMemberRequest
+	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString("Invalid request body")
 	}
 
-	for i, member := range members {
-		fmt.Println(member, i)
-		if member.ID == id {
-			if memberUpdate.FirstName != nil {
-				member.FirstName = *memberUpdate.FirstName
-			}
-			if memberUpdate.LastName != nil {
-				member.LastName = *memberUpdate.LastName
-			}
-			if memberUpdate.Gender != nil {
-				member.Gender = *memberUpdate.Gender
-			}
-			if memberUpdate.DateOfBirth != nil {
-				member.DateOfBirth = *memberUpdate.DateOfBirth
-			}
-			if memberUpdate.Address != nil {
-				member.Address = *memberUpdate.Address
-			}
-			members[i] = member
-			return c.JSON(member)
-		}
+	updates := map[string]any{}
+	if req.FirstName != nil {
+		updates["first_name"] = *req.FirstName
+	}
+	if req.LastName != nil {
+		updates["last_name"] = *req.LastName
+	}
+	if req.Gender != nil {
+		updates["gender"] = *req.Gender
+	}
+	if req.BirthDay != nil {
+		updates["birth_day"] = *req.BirthDay
+	}
+	if req.BirthMonth != nil {
+		updates["birth_month"] = *req.BirthMonth
+	}
+	if req.BirthYear != nil {
+		updates["birth_year"] = *req.BirthYear
+	}
+	if req.AddressLine1 != nil {
+		updates["address_line1"] = *req.AddressLine1
+	}
+	if req.AddressCountry != nil {
+		updates["address_country"] = *req.AddressCountry
+	}
+	if req.AddressProvince != nil {
+		updates["address_province"] = *req.AddressProvince
+	}
+	if req.AddressDistrict != nil {
+		updates["address_district"] = *req.AddressDistrict
+	}
+	if req.PostalCode != nil {
+		updates["postal_code"] = *req.PostalCode
 	}
 
-	return c.Status(fiber.StatusNotFound).SendString("Member with ID " + c.Params("id") + " not found")
+	if len(updates) > 0 {
+		db.Model(&member).Updates(updates)
+	}
+
+	db.First(&member, id)
+	return c.JSON(member)
 }
 
 func changePassword(c fiber.Ctx) error {
@@ -66,68 +84,69 @@ func changePassword(c fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
-	
-	changePassword := new(ChangePasswordRequest)
-	if err := c.Bind().JSON(changePassword); err != nil {
-		return c.Status(fiber.StatusBadRequest).SendString("Invalid request body")
-	}
-	for i, member := range members {
-		if member.ID == id {
-			if member.PasswordHash != changePassword.CurrentPassword {
-				return c.Status(fiber.StatusBadRequest).SendString("Current password is incorrect")
-			}
-			if changePassword.NewPassword != changePassword.ConfirmPassword {
-				return c.Status(fiber.StatusBadRequest).SendString("New password and confirm password do not match")
-			}
-			member.PasswordHash = changePassword.NewPassword
-			members[i] = member
-			return c.JSON(fiber.Map{"message": "Password changed successfully"})
-		}
+
+	var member Member
+	if err := db.First(&member, id).Error; err != nil {
+		return c.Status(fiber.StatusNotFound).SendString("Member with ID " + c.Params("id") + " not found")
 	}
 
-	return c.Status(fiber.StatusNotFound).SendString("Member with ID " + c.Params("id") + " not found")
+	var req ChangePasswordRequest
+	if err := c.Bind().JSON(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).SendString("Invalid request body")
+	}
+
+	if member.PasswordHash != req.CurrentPassword {
+		return c.Status(fiber.StatusBadRequest).SendString("Current password is incorrect")
+	}
+	if req.NewPassword != req.ConfirmPassword {
+		return c.Status(fiber.StatusBadRequest).SendString("New password and confirm password do not match")
+	}
+
+	db.Model(&member).Update("password_hash", req.NewPassword)
+	return c.JSON(fiber.Map{"message": "Password changed successfully"})
 }
 
 func signup(c fiber.Ctx) error {
-	newMember := new(SignUpRequest)
-	if err := c.Bind().JSON(newMember); err != nil {
+	var req SignUpRequest
+	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
 
-	// password and confirm password must match
-	if newMember.Password != newMember.ConfirmPassword {
+	if req.Password != req.ConfirmPassword {
 		return c.Status(fiber.StatusBadRequest).SendString("Password and confirm password do not match")
 	}
 
-	// check if email already exists
-	for _, m := range members {
-		if m.Email == newMember.Email {
-			return c.Status(fiber.StatusBadRequest).SendString("Email already exists")
-		}
+	var existing Member
+	if err := db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
+		return c.Status(fiber.StatusBadRequest).SendString("Email already exists")
 	}
 
-	members = append(members, Member{
-		ID:        len(members) + 1,
-		FirstName: newMember.FirstName,
-		LastName:  newMember.LastName,
-		Email:     newMember.Email,
-		PasswordHash: newMember.Password,
-	})
-	return c.JSON(newMember)
+	member := Member{
+		FirstName:    req.FirstName,
+		LastName:     req.LastName,
+		Email:        req.Email,
+		PasswordHash: req.Password,
+	}
+	if err := db.Create(&member).Error; err != nil {
+		return c.Status(fiber.StatusInternalServerError).SendString("Failed to create member")
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(member)
 }
 
 func signin(c fiber.Ctx) error {
-	member := new(SignInRequest)
-	if err := c.Bind().JSON(member); err != nil {
+	var req SignInRequest
+	if err := c.Bind().JSON(&req); err != nil {
 		return c.Status(fiber.StatusBadRequest).SendString(err.Error())
 	}
-	for _, m := range members {
-		if m.Email == member.Email && m.PasswordHash == member.Password {
-			return c.JSON(fiber.Map{
-				"message": "Sign in successful",
-				"member":  m,
-			})
-		}
+
+	var member Member
+	if err := db.Where("email = ? AND password_hash = ?", req.Email, req.Password).First(&member).Error; err != nil {
+		return c.Status(fiber.StatusUnauthorized).SendString("Invalid email or password")
 	}
-	return c.Status(fiber.StatusUnauthorized).SendString("Invalid email or password")
+
+	return c.JSON(fiber.Map{
+		"message": "Sign in successful",
+		"member":  member,
+	})
 }
