@@ -1,52 +1,67 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
+	"strings"
 	"syscall"
 	"time"
 
+	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/sony/gobreaker/v2"
+
 	"github.com/gofiber/fiber/v3"
+	"github.com/zensos/microservice-project/internal/circuitbreaker"
 	"github.com/zensos/microservice-project/internal/common"
+	"github.com/zensos/microservice-project/internal/database"
+	"github.com/zensos/microservice-project/internal/middleware"
+	"github.com/zensos/microservice-project/internal/rabbitmq"
+	"gorm.io/gorm"
 )
 
-// TODO(DB): replace in-memory seat reservation with DB transaction:
-// 1) insert bookings
-// 2) insert booking_seats (UNIQUE(event_id, seat_id) to prevent oversell)
-// 3) on unique violation -> return 409 and rollback
-
-// รับคำขอจอง + ตรวจข้อมูล
-type CreateBookingRequest struct {
-	EventID  int      `json:"event_id"`
-	MemberID string   `json:"member_id"`
-	SeatIDs  []string `json:"seat_ids"`
-}
-
-type Ticket struct {
-	TicketID  string `json:"ticket_id"`
-	BookingID string `json:"booking_id"`
-	EventID   int    `json:"event_id"`
-	MemberID  string `json:"member_id"`
-	SeatID    string `json:"seat_id"`
-}
-
-// เก็บ seat ที่ถูกจอง, ตั๋ว
 var (
-	seatMu        = sync.Mutex{}
-	reservedSeats = map[string]bool{} // key = fmt.Sprintf("%d:%s", eventID, seatID)
+	db   *gorm.DB
+	mqCh *amqp.Channel
 
-	ticketMu    = sync.Mutex{}
-	userTickets = map[string][]Ticket{} // member_id -> tickets[]
+	eventCB   *gobreaker.CircuitBreaker[circuitbreaker.BreakerResponse]
+	memberCB  *gobreaker.CircuitBreaker[circuitbreaker.BreakerResponse]
+	paymentCB *gobreaker.CircuitBreaker[circuitbreaker.BreakerResponse]
 )
 
 func main() {
+	db = database.Connect()
+	db.AutoMigrate(&Booking{}, &BookingSeat{})
+
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_booking_seats_event_seat ON booking_seats (event_id, seat_id) WHERE deleted_at IS NULL")
+
+	mqConn := rabbitmq.Connect()
+	defer mqConn.Close()
+
+	var err error
+	mqCh, err = mqConn.Channel()
+	if err != nil {
+		log.Fatalf("failed to open rabbitmq channel: %v", err)
+	}
+	defer mqCh.Close()
+
+	rabbitmq.DeclareQueue(mqCh, "booking.confirmed")
+
+	eventCB = circuitbreaker.NewBreaker("event-service")
+	memberCB = circuitbreaker.NewBreaker("member-service")
+	paymentCB = circuitbreaker.NewBreaker("payment-service")
+
 	app := fiber.New()
+
+	app.Use(middleware.RateLimiter(middleware.RateLimiterConfig{
+		Max:        100,
+		WindowSecs: 60,
+	}))
 
 	app.Get("/", func(c fiber.Ctx) error {
 		return c.SendString("Booking Service")
@@ -56,7 +71,6 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "service": "booking"})
 	})
 
-	// Note: Dont touch this naja
 	consulClient, serviceID, err := common.RegisterService(common.ServiceConfig{
 		Name: "booking",
 		Port: 3001,
@@ -65,19 +79,16 @@ func main() {
 		log.Printf("couldn't register with consul: %v", err)
 	}
 
-	// TODO: replace it with real business logic
 	app.Post("/bookings", func(c fiber.Ctx) error {
 		if consulClient == nil {
 			return c.Status(503).JSON(fiber.Map{"error": "service discovery is not available right now"})
 		}
 
-		// json
 		var req CreateBookingRequest
 		if err := c.Bind().Body(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "invalid json body"})
 		}
 
-		//เช็คค่าเบสิก
 		if req.EventID <= 0 {
 			return c.Status(400).JSON(fiber.Map{"error": "event_id must be > 0"})
 		}
@@ -88,7 +99,6 @@ func main() {
 			return c.Status(400).JSON(fiber.Map{"error": "seat_ids must not be empty"})
 		}
 
-		//เช็ค seat list ไม่ให้ว่างและซ้ำ
 		seen := map[string]bool{}
 		for _, seat := range req.SeatIDs {
 			if seat == "" {
@@ -100,22 +110,20 @@ func main() {
 			seen[seat] = true
 		}
 
-		// เช็คว่าเจอ event มั้ย
 		eventAddr, err := common.DiscoverService(consulClient, "event")
 		if err != nil {
 			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't find the event service: %v", err)})
 		}
 
-		//ใส่ timeout ให้ event/member call (กันค้าง)
-		client := &http.Client{Timeout: 3 * time.Second}
-		// ช็คeventว่ารันอยู่มั้ยและค่อยไปเช็คstatus
-		// NOTE: ตอนต่อ DB จริง ควรใช้ http.Client พร้อม timeout (กันค้าง)
 		eventURL := fmt.Sprintf("http://%s/events/%d", eventAddr, req.EventID)
-		eventResp, err := client.Get(eventURL)
+		eventReq, _ := http.NewRequest("GET", eventURL, nil)
+		eventResp, err := circuitbreaker.Do(eventCB, eventReq)
 		if err != nil {
+			if errors.Is(err, gobreaker.ErrOpenState) {
+				return c.Status(503).JSON(fiber.Map{"error": "event service is temporarily unavailable"})
+			}
 			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't reach the event service: %v", err)})
 		}
-		defer eventResp.Body.Close()
 
 		if eventResp.StatusCode == 404 {
 			return c.Status(404).JSON(fiber.Map{"error": "event not found"})
@@ -125,12 +133,13 @@ func main() {
 		}
 
 		var eventData map[string]any
-		eventBody, _ := io.ReadAll(eventResp.Body)
-		if err := json.Unmarshal(eventBody, &eventData); err != nil {
+		if err := json.Unmarshal(eventResp.Body, &eventData); err != nil {
 			return c.Status(502).JSON(fiber.Map{"error": "got a bad response from the event service"})
 		}
 
-		log.Println("checking member service...")
+		price, _ := eventData["price"].(float64)
+		totalAmount := price * float64(len(req.SeatIDs))
+		eventName, _ := eventData["name"].(string)
 
 		memberAddr, err := common.DiscoverService(consulClient, "member")
 		if err != nil {
@@ -138,11 +147,14 @@ func main() {
 		}
 
 		memberURL := fmt.Sprintf("http://%s/members/%s", memberAddr, req.MemberID)
-		memberResp, err := client.Get(memberURL)
+		memberReq, _ := http.NewRequest("GET", memberURL, nil)
+		memberResp, err := circuitbreaker.Do(memberCB, memberReq)
 		if err != nil {
+			if errors.Is(err, gobreaker.ErrOpenState) {
+				return c.Status(503).JSON(fiber.Map{"error": "member service is temporarily unavailable"})
+			}
 			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't reach the member service: %v", err)})
 		}
-		defer memberResp.Body.Close()
 
 		if memberResp.StatusCode == 404 {
 			return c.Status(404).JSON(fiber.Map{"error": "user not found"})
@@ -151,70 +163,187 @@ func main() {
 			return c.Status(502).JSON(fiber.Map{"error": "member service error"})
 		}
 
-		//ส่วนเช็คสถานะทีนั่ง
-		seatMu.Lock()
+		var memberData map[string]any
+		json.Unmarshal(memberResp.Body, &memberData)
 
-		// check availability
-		for _, seat := range req.SeatIDs {
-			key := fmt.Sprintf("%d:%s", req.EventID, seat)
-			if reservedSeats[key] {
-				seatMu.Unlock()
-				return c.Status(409).JSON(fiber.Map{"error": fmt.Sprintf("seat %s is not available", seat)})
-			}
-		}
-		// reserve
-		for _, seat := range req.SeatIDs {
-			key := fmt.Sprintf("%d:%s", req.EventID, seat)
-			reservedSeats[key] = true
+		memberEmail, _ := memberData["email"].(string)
+		firstName, _ := memberData["first_name"].(string)
+		lastName, _ := memberData["last_name"].(string)
+		memberName := strings.TrimSpace(firstName + " " + lastName)
+
+		paymentAddr, err := common.DiscoverService(consulClient, "payment")
+		if err != nil {
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't find the payment service: %v", err)})
 		}
 
-		seatMu.Unlock()
-
-		// TODO(DB): generate booking_id (UUID) and persist to DB
 		bookingID := fmt.Sprintf("book_%d", time.Now().UnixNano())
 
-		base := time.Now().UnixNano()
-		//สร้างตั๋วเก็บตั๋ว
-		ticketMu.Lock()
-		for i, seat := range req.SeatIDs {
-			t := Ticket{
-				TicketID:  fmt.Sprintf("t_%d_%d", base, i),
-				BookingID: bookingID,
-				EventID:   req.EventID,
-				MemberID:  req.MemberID,
-				SeatID:    seat,
-			}
-			userTickets[req.MemberID] = append(userTickets[req.MemberID], t)
-		}
-		ticketMu.Unlock()
-
-		return c.Status(201).JSON(fiber.Map{
+		payBody, _ := json.Marshal(map[string]any{
 			"booking_id": bookingID,
-			"event":      eventData,
 			"member_id":  req.MemberID,
-			"seat_ids":   req.SeatIDs,
-			"status":     "PENDING", // อาจเป็น PENDING ก่อน แล้วค่อย CONFIRMED หลัง payment
+			"amount":     totalAmount,
 		})
 
-	})
-
-	app.Get("/users/:member_id/tickets", func(c fiber.Ctx) error {
-		MemberID := c.Params("member_id")
-		if MemberID == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "member_id is required"})
+		payURL := fmt.Sprintf("http://%s/payments", paymentAddr)
+		payReq, _ := http.NewRequest("POST", payURL, bytes.NewReader(payBody))
+		payReq.Header.Set("Content-Type", "application/json")
+		payResp, err := circuitbreaker.Do(paymentCB, payReq)
+		if err != nil {
+			if errors.Is(err, gobreaker.ErrOpenState) {
+				return c.Status(503).JSON(fiber.Map{"error": "payment service is temporarily unavailable"})
+			}
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't reach the payment service: %v", err)})
 		}
 
-		ticketMu.Lock()
-		tickets, ok := userTickets[MemberID]
-		ticketMu.Unlock()
+		if payResp.StatusCode != 201 {
+			var payErr map[string]any
+			json.Unmarshal(payResp.Body, &payErr)
+			errMsg := "payment failed"
+			if msg, ok := payErr["error"].(string); ok {
+				errMsg = msg
+			}
+			return c.Status(payResp.StatusCode).JSON(fiber.Map{"error": errMsg})
+		}
 
-		if !ok {
-			tickets = []Ticket{}
+		txErr := db.Transaction(func(tx *gorm.DB) error {
+			booking := Booking{
+				BookingID:   bookingID,
+				EventID:     req.EventID,
+				MemberID:    req.MemberID,
+				TotalAmount: totalAmount,
+				Status:      "CONFIRMED",
+			}
+			if err := tx.Create(&booking).Error; err != nil {
+				return err
+			}
+
+			for _, seatID := range req.SeatIDs {
+				seat := BookingSeat{
+					BookingID: bookingID,
+					EventID:   req.EventID,
+					SeatID:    seatID,
+				}
+				if err := tx.Create(&seat).Error; err != nil {
+					return err
+				}
+			}
+
+			return nil
+		})
+
+		if txErr != nil {
+			refundBody, _ := json.Marshal(map[string]any{
+				"booking_id": bookingID,
+				"member_id":  req.MemberID,
+				"amount":     totalAmount,
+			})
+			refundURL := fmt.Sprintf("http://%s/payments/refund", paymentAddr)
+			refundReq, _ := http.NewRequest("POST", refundURL, bytes.NewReader(refundBody))
+			refundReq.Header.Set("Content-Type", "application/json")
+			circuitbreaker.Do(paymentCB, refundReq)
+
+			if isDuplicateKeyError(txErr) {
+				return c.Status(409).JSON(fiber.Map{"error": "one or more seats are already reserved"})
+			}
+			return c.Status(500).JSON(fiber.Map{"error": "failed to create booking"})
+		}
+
+		mqEvent, _ := json.Marshal(map[string]any{
+			"booking_id":   bookingID,
+			"member_id":    req.MemberID,
+			"member_email": memberEmail,
+			"member_name":  memberName,
+			"event_name":   eventName,
+			"seat_ids":     req.SeatIDs,
+			"total_amount": totalAmount,
+		})
+		if err := rabbitmq.Publish(mqCh, "booking.confirmed", mqEvent); err != nil {
+			log.Printf("failed to publish booking event to rabbitmq: %v", err)
+		}
+
+		return c.Status(201).JSON(fiber.Map{
+			"booking_id":   bookingID,
+			"event":        eventData,
+			"member_id":    req.MemberID,
+			"seat_ids":     req.SeatIDs,
+			"total_amount": totalAmount,
+			"status":       "CONFIRMED",
+		})
+	})
+
+	app.Post("/bookings/:booking_id/cancel", func(c fiber.Ctx) error {
+		if consulClient == nil {
+			return c.Status(503).JSON(fiber.Map{"error": "service discovery is not available right now"})
+		}
+
+		bookingID := c.Params("booking_id")
+
+		var booking Booking
+		if err := db.Preload("Seats").Where("booking_id = ?", bookingID).First(&booking).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "booking not found"})
+		}
+
+		if booking.Status == "CANCELLED" {
+			return c.Status(400).JSON(fiber.Map{"error": "booking is already cancelled"})
+		}
+
+		paymentAddr, err := common.DiscoverService(consulClient, "payment")
+		if err != nil {
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't find the payment service: %v", err)})
+		}
+
+		refundBody, _ := json.Marshal(map[string]any{
+			"booking_id": bookingID,
+			"member_id":  booking.MemberID,
+			"amount":     booking.TotalAmount,
+		})
+
+		refundURL := fmt.Sprintf("http://%s/payments/refund", paymentAddr)
+		refundReq, _ := http.NewRequest("POST", refundURL, bytes.NewReader(refundBody))
+		refundReq.Header.Set("Content-Type", "application/json")
+		refundResp, err := circuitbreaker.Do(paymentCB, refundReq)
+		if err != nil {
+			if errors.Is(err, gobreaker.ErrOpenState) {
+				return c.Status(503).JSON(fiber.Map{"error": "payment service is temporarily unavailable"})
+			}
+			return c.Status(502).JSON(fiber.Map{"error": fmt.Sprintf("couldn't reach the payment service: %v", err)})
+		}
+
+		if refundResp.StatusCode != 200 {
+			var refundErr map[string]any
+			json.Unmarshal(refundResp.Body, &refundErr)
+			errMsg := "refund failed"
+			if msg, ok := refundErr["error"].(string); ok {
+				errMsg = msg
+			}
+			return c.Status(refundResp.StatusCode).JSON(fiber.Map{"error": errMsg})
+		}
+
+		db.Model(&booking).Update("status", "CANCELLED")
+
+		for _, seat := range booking.Seats {
+			db.Delete(&seat)
 		}
 
 		return c.JSON(fiber.Map{
-			"member_id": MemberID,
-			"tickets":   tickets,
+			"message":    "booking cancelled and refunded",
+			"booking_id": bookingID,
+			"refunded":   booking.TotalAmount,
+		})
+	})
+
+	app.Get("/users/:member_id/tickets", func(c fiber.Ctx) error {
+		memberID := c.Params("member_id")
+		if memberID == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "member_id is required"})
+		}
+
+		var bookings []Booking
+		db.Preload("Seats").Where("member_id = ?", memberID).Find(&bookings)
+
+		return c.JSON(fiber.Map{
+			"member_id": memberID,
+			"bookings":  bookings,
 		})
 	})
 
@@ -234,4 +363,12 @@ func main() {
 	}()
 
 	log.Fatal(app.Listen(":3001"))
+}
+
+func isDuplicateKeyError(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == "23505"
+	}
+	return false
 }

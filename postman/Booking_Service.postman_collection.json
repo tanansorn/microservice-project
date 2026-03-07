@@ -1,0 +1,52 @@
+{
+	"info": {
+		"name": "Booking Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3001"
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/health"
+			}
+		},
+		{
+			"name": "Create Booking (auto-pays from wallet)",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/bookings",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"event_id\": 1,\n  \"member_id\": \"1\",\n  \"seat_ids\": [\"A1\", \"A2\"]\n}"
+				}
+			}
+		},
+		{
+			"name": "Cancel Booking (auto-refunds to wallet)",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/bookings/book_123456789/cancel"
+			}
+		},
+		{
+			"name": "Get User Tickets",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/users/1/tickets"
+			}
+		}
+	]
+}
