@@ -1,0 +1,127 @@
+{
+	"info": {
+		"name": "Payment Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3004"
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/health"
+			}
+		},
+		{
+			"name": "Top Up via Promptpay",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/wallets/top-up",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"member_id\": \"1\",\n  \"amount\": 500.00,\n  \"method\": \"promptpay\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Top Up via Banking",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/wallets/top-up",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"member_id\": \"1\",\n  \"amount\": 1000.00,\n  \"method\": \"banking\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Top Up via TrueWallet",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/wallets/top-up",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"member_id\": \"1\",\n  \"amount\": 200.00,\n  \"method\": \"truewallet\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Get Wallet Balance",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/wallets/1"
+			}
+		},
+		{
+			"name": "Pay for Booking",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/payments",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"booking_id\": \"book_123456789\",\n  \"member_id\": \"1\",\n  \"amount\": 300.00\n}"
+				}
+			}
+		},
+		{
+			"name": "Refund Payment",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/payments/refund",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"booking_id\": \"book_123456789\",\n  \"member_id\": \"1\",\n  \"amount\": 300.00\n}"
+				}
+			}
+		},
+		{
+			"name": "Get Payment By ID",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/payments/pay_123456789"
+			}
+		},
+		{
+			"name": "Get Ledger History",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/wallets/1/ledger"
+			}
+		}
+	]
+}
