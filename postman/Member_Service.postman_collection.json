@@ -1,0 +1,97 @@
+{
+	"info": {
+		"name": "Member Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3003"
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/health"
+			}
+		},
+		{
+			"name": "Sign Up",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/auth/signup",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"email\": \"66070065@kmitl.ac.th\",\n  \"password\": \"secret123\",\n  \"confirm_password\": \"secret123\",\n  \"first_name\": \"Nuttawit\",\n  \"last_name\": \"Phiphatchirakul\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Sign In",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/auth/signin",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"email\": \"66070065@kmitl.ac.th\",\n  \"password\": \"secret123\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Get Member Profile",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/members/1"
+			}
+		},
+		{
+			"name": "Update Member Profile",
+			"request": {
+				"method": "PATCH",
+				"url": "{{baseUrl}}/members/1",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"first_name\": \"Nuttawit-Updated\",\n  \"gender\": \"male\",\n  \"birth_day\": 2,\n  \"birth_month\": 8,\n  \"birth_year\": 2004,\n  \"address_line1\": \"Samut Prakan\",\n  \"address_country\": \"Thailand\",\n  \"address_province\": \"Bangkok\",\n  \"address_district\": \"Sathon\",\n  \"postal_code\": \"10120\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Change Password",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/members/1/change-password",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"current_password\": \"secret123\",\n  \"new_password\": \"newpass456\",\n  \"confirm_password\": \"newpass456\"\n}"
+				}
+			}
+		}
+	]
+}
+
