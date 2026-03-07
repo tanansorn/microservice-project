@@ -4,14 +4,28 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/zensos/microservice-project/internal/common"
+	"github.com/zensos/microservice-project/internal/database"
+	"github.com/zensos/microservice-project/internal/middleware"
+	"gorm.io/gorm"
 )
 
+var db *gorm.DB
+
 func main() {
+	db = database.Connect()
+	db.AutoMigrate(&Event{})
+
 	app := fiber.New()
+
+	app.Use(middleware.RateLimiter(middleware.RateLimiterConfig{
+		Max:        100,
+		WindowSecs: 60,
+	}))
 
 	app.Get("/", func(c fiber.Ctx) error {
 		return c.SendString("Event Service")
@@ -21,16 +35,39 @@ func main() {
 		return c.JSON(fiber.Map{"status": "ok", "service": "event"})
 	})
 
-	// TODO: replace it with real business logic
-	app.Get("/events/:id", func(c fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"id":    1,
-			"name":  "eiei",
-			"price": 150.00,
-		})
+	app.Get("/events", func(c fiber.Ctx) error {
+		var events []Event
+		db.Find(&events)
+		return c.JSON(events)
 	})
 
-	// Note: Dont touch this naja
+	app.Get("/events/:id", func(c fiber.Ctx) error {
+		id, err := strconv.Atoi(c.Params("id"))
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid event id"})
+		}
+
+		var event Event
+		if err := db.First(&event, id).Error; err != nil {
+			return c.Status(404).JSON(fiber.Map{"error": "event not found"})
+		}
+
+		return c.JSON(event)
+	})
+
+	app.Post("/events", func(c fiber.Ctx) error {
+		var event Event
+		if err := c.Bind().JSON(&event); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "invalid request body"})
+		}
+
+		if err := db.Create(&event).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{"error": "failed to create event"})
+		}
+
+		return c.Status(201).JSON(event)
+	})
+
 	consulClient, serviceID, err := common.RegisterService(common.ServiceConfig{
 		Name: "event",
 		Port: 3002,
