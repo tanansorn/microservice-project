@@ -1,0 +1,52 @@
+{
+	"info": {
+		"name": "Event Service",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:3002"
+		}
+	],
+	"item": [
+		{
+			"name": "Health Check",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/health"
+			}
+		},
+		{
+			"name": "Create Event",
+			"request": {
+				"method": "POST",
+				"url": "{{baseUrl}}/events",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"name\": \"EXO PLANET #5 - EXplOration\",\n  \"price\": 6000.00,\n  \"date\": \"2019-08-24T11:00:00Z\",\n  \"venue\": \"Impact Arena Muang Thong Thani\"\n}"
+				}
+			}
+		},
+		{
+			"name": "Get All Events",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/events"
+			}
+		},
+		{
+			"name": "Get Event By ID",
+			"request": {
+				"method": "GET",
+				"url": "{{baseUrl}}/events/1"
+			}
+		}
+	]
+}

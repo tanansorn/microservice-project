@@ -6,6 +6,7 @@ require (
 	github.com/gofiber/fiber/v3 v3.0.0
 	github.com/hashicorp/consul/api v1.33.3
 	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/sony/gobreaker/v2 v2.4.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )
@@ -45,5 +46,5 @@ require (
 	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
 )
