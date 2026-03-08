@@ -129,12 +129,14 @@ services:
     build:
       context: ../
       dockerfile: services/mailer/Dockerfile
+    env_file:
+      - .env
     environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
       SMTP_HOST: smtp.gmail.com
       SMTP_PORT: "587"
-      SMTP_EMAIL: ""
-      SMTP_PASSWORD: ""
+      SMTP_EMAIL: ${SMTP_EMAIL}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
     depends_on:
       - rabbitmq
 
