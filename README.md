@@ -60,6 +60,7 @@ deployments/.env
 
 > ⚠️ **Important**
 > You must create the `.env` file inside the `deployments` directory before running Docker.
+> If there is any problem with service force running it again.
 
 ---
 
